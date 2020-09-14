@@ -1,0 +1,4 @@
+record_id,accout_number,cash_balance,currency,taxes_paid
+1,12345678,15000.00,EUR,0.00
+2,12345679,-56.00,EUR,789.56
+3,12345671,5.00,EUR,643.01

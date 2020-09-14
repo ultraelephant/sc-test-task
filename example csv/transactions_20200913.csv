@@ -1,0 +1,5 @@
+record_id,accout_number,transaction_reference,amount,keyword
+1,12345678,14e56786,5000,DEPOSIT
+2,12345679,dfeb5fe13cd4,-789.56,TAX
+3,12345679,dfeb5fe13cd4,-39.36,TAX
+4,12345671,dfeb5fe13cd4,23й3,DEPOSIT
