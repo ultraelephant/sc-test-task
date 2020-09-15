@@ -1,5 +1,6 @@
 #!/usr/bin/python
 # -*- coding: utf-8 -*-
+import os
 import csv
 import imp
 import sys
@@ -9,11 +10,10 @@ import boto3
 from datetime import datetime
 from multiprocessing import Process
 
-terraform_variables = imp.load_source('terraform_variables','./terraform.tfvars')
-queue_name = '{}-queue'.format(terraform_variables.project_name)
+queue_name = os.environ['queue_name']
 
 
-def testfile(file_name, s3_object, fields_list):
+def csv_data_model_compliant_check(file_name, s3_object, fields_list):
 
     sqs_client = boto3.client('sqs')
     sqs_queue_url = sqs_client.get_queue_url(QueueName=queue_name)['QueueUrl']
@@ -41,7 +41,7 @@ def testfile(file_name, s3_object, fields_list):
     return True
 
 
-def processclients(clients_csv, portfolios_csv, transactions_csv):
+def process_clients(clients_csv, portfolios_csv, transactions_csv):
 
     sqs_client = boto3.client('sqs')
     sqs_queue_url = sqs_client.get_queue_url(QueueName=queue_name)['QueueUrl']
@@ -79,18 +79,17 @@ def processclients(clients_csv, portfolios_csv, transactions_csv):
                             msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(client_message))
                             error_skip = True
                             break
-            if error_skip == True:
+            if error_skip:
                 break
-        if error_skip == True:
+        if error_skip:
             continue
 
         client_message['taxes_paid'] = client_tax
 
-        msg = sqs_client.send_message(QueueUrl=sqs_queue_url,
-                MessageBody=json.dumps(client_message))
+        msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(client_message))
 
 
-def processportfolios(portfolios_csv, accounts_csv, transactions_csv):
+def process_portfolios(portfolios_csv, accounts_csv, transactions_csv):
 
     sqs_client = boto3.client('sqs')
     sqs_queue_url = sqs_client.get_queue_url(QueueName=queue_name)['QueueUrl']
@@ -131,14 +130,14 @@ def processportfolios(portfolios_csv, accounts_csv, transactions_csv):
                         msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(portfolio_message))
                         error_skip = True
                         break
-        if error_skip == True:
+        if error_skip:
             continue
         portfolio_message['number_of_transactions'] = transactions_quantity
         portfolio_message['sum_of_deposits'] = deposit
         msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(portfolio_message))
 
 
-def moveprocessedfiles(bucket_name, file_name):
+def move_processed_files(bucket_name, file_name):
     s3 = boto3.resource('s3')
     s3.Object(bucket_name, 'processed/{}-processed'.format(file_name)).copy_from(CopySource='{}/{}'.format(bucket_name, file_name))
     s3.Object(bucket_name, file_name).delete()
@@ -146,7 +145,6 @@ def moveprocessedfiles(bucket_name, file_name):
 
 def lambda_handler(event, context):
     s3 = boto3.client('s3')
-    lambda_client = boto3.client('lambda')
     today_timestamp = datetime.now()
     datetime_mask = '%Y%m%d'
     bucket_name = event['Records'][0]['s3']['bucket']['name']
@@ -167,23 +165,25 @@ def lambda_handler(event, context):
                 csv_object_clients = s3.get_object(Bucket=bucket_name, Key=clients_csv)
                 csv_object_accounts = s3.get_object(Bucket=bucket_name, Key=accounts_csv)
                 csv_object_portfolios = s3.get_object(Bucket=bucket_name, Key=portfolios_csv)
-                csv_object_transactions = s3.get_object(Bucket=bucket_name,Key=transactions_csv)
-                if (testfile(clients_csv, csv_object_clients,
-                    clients_fields), testfile(accounts_csv,
+                csv_object_transactions = s3.get_object(Bucket=bucket_name, Key=transactions_csv)
+                if (csv_data_model_compliant_check(clients_csv,
+                    csv_object_clients, clients_fields),
+                    csv_data_model_compliant_check(accounts_csv,
                     csv_object_accounts, accounts_fields),
-                    testfile(portfolios_csv, csv_object_portfolios,
-                    portfolios_fields), testfile(transactions_csv,
+                    csv_data_model_compliant_check(portfolios_csv,
+                    csv_object_portfolios, portfolios_fields),
+                    csv_data_model_compliant_check(transactions_csv,
                     csv_object_transactions, transactions_fields)) \
-                    == (True, True, True, True):
+                        == (True, True, True, True):
 
-                    p1 = Process(target=processclients(clients_csv, portfolios_csv, transactions_csv))
+                    p1 = Process(target=process_clients(clients_csv, portfolios_csv, transactions_csv))
                     p1.start()
-                    p2 = Process(target=processportfolios(portfolios_csv, accounts_csv, transactions_csv))
+                    p2 = Process(target=process_portfolios(portfolios_csv, accounts_csv, transactions_csv))
                     p2.start()
                     p1.join()
                     p2.join()
-                    moveprocessedfiles(bucket_name, clients_csv)
-                    moveprocessedfiles(bucket_name, accounts_csv)
-                    moveprocessedfiles(bucket_name, portfolios_csv)
-                    moveprocessedfiles(bucket_name, transactions_csv)
+                    move_processed_files(bucket_name, clients_csv)
+                    move_processed_files(bucket_name, accounts_csv)
+                    move_processed_files(bucket_name, portfolios_csv)
+                    move_processed_files(bucket_name, transactions_csv)
                     return 0
