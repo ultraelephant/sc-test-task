@@ -1,3 +1,5 @@
+#!/usr/bin/python
+# -*- coding: utf-8 -*-
 import csv
 import imp
 import sys
@@ -7,173 +9,181 @@ import boto3
 from datetime import datetime
 from multiprocessing import Process
 
-tervar = imp.load_source("tervar", "./terraform.tfvars")
-queuename = '{}-queue'.format(tervar.project_name)
-
-def testfile(filename,s3object,fieldslist):
-  
-  sqs_client = boto3.client('sqs')
-  sqs_queue_url = sqs_client.get_queue_url(QueueName=queuename)['QueueUrl']
-  
-  
-  errormessage = {}
-  data = s3object['Body'].read()
-  contents = data.decode('utf-8')
-  
-  with open('/tmp/{}'.format(filename), 'a') as csv_data:
-    csv_data.write(contents)
-  
-  file = open('/tmp/{}'.format(filename), "r")
-  dict_reader = csv.DictReader(file)
-  for entry in list(dict_reader):
-    for field in fieldslist:
-      if field not in entry:
-        errormessage['type']='error_message'
-        errormessage['client_reference']=None
-        errormessage['portfolio_reference']=None
-        errormessage['message']='{} have no field {}'.format(filename,field)
-        msg = sqs_client.send_message(QueueUrl=sqs_queue_url,MessageBody=json.dumps(errormessage))
-        sys.exit(0)
-  
-  return True
-  
-
-def processclients(clientscsv,portfolioscsv,transactionscsv):
-
-  sqs_client = boto3.client('sqs')
-  sqs_queue_url = sqs_client.get_queue_url(QueueName=queuename)['QueueUrl']
-  
-  file_cl = open('/tmp/{}'.format(clientscsv), "r")
-  dict_reader_cl = csv.DictReader(file_cl)
-  file_pf = open('/tmp/{}'.format(portfolioscsv), "r")
-  dict_reader_pf = csv.DictReader(file_pf)
-  file_tr = open('/tmp/{}'.format(transactionscsv), "r")
-  dict_reader_tr = csv.DictReader(file_tr)
-  
-  for entry_cl in list(dict_reader_cl):
-    clientmessage = {}
-    clienttax = 0.00
-    json_from_csv_cl = entry_cl
-    clientmessage['type']='client_message'
-
-    clientmessage['client_reference']=json_from_csv_cl['client_reference']
-    clientmessage['tax_free_allowance']=json_from_csv_cl['tax_free_allowance']
-
-    for entry_pf in list(dict_reader_pf):
-      json_from_csv_pf = entry_pf
-
-      if json_from_csv_pf['client_reference'] == json_from_csv_cl['client_reference']:
-        for entry_tr in list(dict_reader_tr):
-          json_from_csv_tr = entry_tr
-
-          if json_from_csv_tr['accout_number'] == json_from_csv_pf['accout_number'] and json_from_csv_tr['keyword'] == 'TAX':
-
-            try:
-              clienttax = clienttax + -float(json_from_csv_tr['amount'])
-            except:
-              clientmessage['type']='error_message'
-              clientmessage['portfolio_reference']=json_from_csv_pf['portfolio_reference']
-              clientmessage['message']='failed to calculate taxes_paid'
-              del (clientmessage['tax_free_allowance'])
-              msg = sqs_client.send_message(QueueUrl=sqs_queue_url,MessageBody=json.dumps(clientmessage))
-              return 0
-
-        file_tr.seek(0)
-    file_pf.seek(0)
-    clientmessage['taxes_paid'] = clienttax
-
-    msg = sqs_client.send_message(QueueUrl=sqs_queue_url,MessageBody=json.dumps(clientmessage))
+terraform_variables = imp.load_source('terraform_variables','./terraform.tfvars')
+queue_name = '{}-queue'.format(terraform_variables.project_name)
 
 
-def processportfolios(portfolioscsv,accountscsv,transactionscsv):
+def testfile(file_name, s3_object, fields_list):
 
-  sqs_client = boto3.client('sqs')
-  sqs_queue_url = sqs_client.get_queue_url(QueueName=queuename)['QueueUrl']
+    sqs_client = boto3.client('sqs')
+    sqs_queue_url = sqs_client.get_queue_url(QueueName=queue_name)['QueueUrl']
+    error_message = {}
+    data = s3_object['Body'].read()
+    contents = data.decode('utf-8')
 
-  file_pf = open('/tmp/{}'.format(portfolioscsv), "r")
-  dict_reader_pf = csv.DictReader(file_pf)
-  file_ac = open('/tmp/{}'.format(accountscsv), "r")
-  dict_reader_ac = csv.DictReader(file_ac)
-  file_tr = open('/tmp/{}'.format(transactionscsv), "r")
-  dict_reader_tr = csv.DictReader(file_tr)
-  
-  for entry_pf in list(dict_reader_pf):
-    trqty = 0
-    dep = 0
-    portfoliomessge = {}
-    json_from_csv_pf = entry_pf
-    portfoliomessge['type']='portfolio_message'
-    portfoliomessge['portfolio_reference']=json_from_csv_pf['portfolio_reference']
+    with open('/tmp/{}'.format(file_name), 'a') as csv_data:
+        csv_data.write(contents)
 
-    for entry_ac in list(dict_reader_ac):
-      json_from_csv_ac = entry_ac
-      portfoliomessge['cash_balance']=json_from_csv_ac['cash_balance']
-    file_ac.seek(0)
+    with open('/tmp/{}'.format(file_name), 'r') as file:
+        csv_reader = csv.DictReader(file)
+        dict_reader = list(csv_reader)
 
-    for entry_tr in list(dict_reader_tr):
-      json_from_csv_tr = entry_tr
+    for entry in dict_reader:
+        for field in fields_list:
+            if field not in entry:
+                error_message['type'] = 'error_message'
+                error_message['client_reference'] = None
+                error_message['portfolio_reference'] = None
+                error_message['message'] = '{} have no field {}'.format(file_name, field)
+                msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(error_message))
+                return False
 
-      if json_from_csv_tr['accout_number'] == json_from_csv_pf['accout_number']:
-        trqty = trqty + 1
-        if json_from_csv_tr['keyword'] == 'DEPOSIT':
-          try:
-            dep = dep + float(json_from_csv_tr['amount'])
-          except:
-            portfoliomessge['type']='error_message'
-            portfoliomessge['client_reference']=None
-            portfoliomessge['message']='failed to calculate deposites'
-            del (portfoliomessge['cash_balance'])
-            msg = sqs_client.send_message(QueueUrl=sqs_queue_url,MessageBody=json.dumps(portfoliomessge))
-            return 0
+    return True
 
-      file_tr.seek(0)
-    portfoliomessge['number_of_transactions'] = trqty
-    portfoliomessge['sum_of_deposits'] = dep 
-    msg = sqs_client.send_message(QueueUrl=sqs_queue_url,MessageBody=json.dumps(portfoliomessge))
 
-def processed_files(bucket_name,filename):
-  s3 = boto3.resource('s3')
-  s3.Object(bucket_name, 'processed/{}-processed'.format(filename)).copy_from(CopySource='{}/{}'.format(bucket_name,filename))
-  s3.Object(bucket_name, filename).delete()
+def processclients(clients_csv, portfolios_csv, transactions_csv):
+
+    sqs_client = boto3.client('sqs')
+    sqs_queue_url = sqs_client.get_queue_url(QueueName=queue_name)['QueueUrl']
+
+    with open('/tmp/{}'.format(clients_csv), 'r') as file_clients:
+        csv_reader_clients = csv.DictReader(file_clients)
+        dict_reader_clients = list(csv_reader_clients)
+    with open('/tmp/{}'.format(portfolios_csv), 'r') as file_portfolios:
+        csv_reader_portfolios = csv.DictReader(file_portfolios)
+        dict_reader_portfolios = list(csv_reader_portfolios)
+    with open('/tmp/{}'.format(transactions_csv), 'r') as file_transactions:
+        csv_reader_transactions = csv.DictReader(file_transactions)
+        dict_reader_transactions = list(csv_reader_transactions)
+
+    for entry_clients in dict_reader_clients:
+        error_skip = False
+        client_message = {}
+        client_tax = 0.00
+        client_message['type'] = 'client_message'
+        client_message['client_reference'] = entry_clients['client_reference']
+        client_message['tax_free_allowance'] = entry_clients['tax_free_allowance']
+
+        for entry_portfolios in dict_reader_portfolios:
+            if entry_portfolios['client_reference'] == entry_clients['client_reference']:
+                for entry_transactions in dict_reader_transactions:
+                    if entry_transactions['accout_number'] == entry_portfolios['accout_number'] and entry_transactions['keyword'] == 'TAX':
+
+                        try:
+                            client_tax = client_tax - float(entry_transactions['amount'])
+                        except:
+                            client_message['type'] = 'error_message'
+                            client_message['portfolio_reference'] = entry_portfolios['portfolio_reference']
+                            client_message['message'] = 'failed to calculate taxes_paid'
+                            del client_message['tax_free_allowance']
+                            msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(client_message))
+                            error_skip = True
+                            break
+            if error_skip == True:
+                break
+        if error_skip == True:
+            continue
+
+        client_message['taxes_paid'] = client_tax
+
+        msg = sqs_client.send_message(QueueUrl=sqs_queue_url,
+                MessageBody=json.dumps(client_message))
+
+
+def processportfolios(portfolios_csv, accounts_csv, transactions_csv):
+
+    sqs_client = boto3.client('sqs')
+    sqs_queue_url = sqs_client.get_queue_url(QueueName=queue_name)['QueueUrl']
+
+    with open('/tmp/{}'.format(portfolios_csv), 'r') as file_portfolios:
+        csv_reader_portfolios = csv.DictReader(file_portfolios)
+        dict_reader_portfolios = list(csv_reader_portfolios)
+    with open('/tmp/{}'.format(accounts_csv), 'r') as file_accounts:
+        csv_reader_accounts = csv.DictReader(file_accounts)
+        dict_reader_accounts = list(csv_reader_accounts)
+    with open('/tmp/{}'.format(transactions_csv), 'r') as file_transactions:
+        csv_reader_transactions = csv.DictReader(file_transactions)
+        dict_reader_transactions = list(csv_reader_transactions)
+
+    for entry_portfolios in dict_reader_portfolios:
+        error_skip = False
+        transactions_quantity = 0
+        deposit = 0
+        portfolio_message = {}
+        portfolio_message['type'] = 'portfolio_message'
+        portfolio_message['portfolio_reference'] = entry_portfolios['portfolio_reference']
+
+        for entry_accounts in dict_reader_accounts:
+            portfolio_message['cash_balance'] = entry_accounts['cash_balance']
+
+        for entry_transactions in dict_reader_transactions:
+
+            if entry_transactions['accout_number'] == entry_portfolios['accout_number']:
+                transactions_quantity = transactions_quantity + 1
+                if entry_transactions['keyword'] == 'DEPOSIT':
+                    try:
+                        deposit = deposit + float(entry_transactions['amount'])
+                    except:
+                        portfolio_message['type'] = 'error_message'
+                        portfolio_message['client_reference'] = None
+                        portfolio_message['message'] = 'failed to calculate deposites'
+                        del portfolio_message['cash_balance']
+                        msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(portfolio_message))
+                        error_skip = True
+                        break
+        if error_skip == True:
+            continue
+        portfolio_message['number_of_transactions'] = transactions_quantity
+        portfolio_message['sum_of_deposits'] = deposit
+        msg = sqs_client.send_message(QueueUrl=sqs_queue_url, MessageBody=json.dumps(portfolio_message))
+
+
+def moveprocessedfiles(bucket_name, file_name):
+    s3 = boto3.resource('s3')
+    s3.Object(bucket_name, 'processed/{}-processed'.format(file_name)).copy_from(CopySource='{}/{}'.format(bucket_name, file_name))
+    s3.Object(bucket_name, file_name).delete()
+
 
 def lambda_handler(event, context):
-  s3 = boto3.client('s3')
-  lambda_client = boto3.client('lambda')
-  
-  todaytimestamp = datetime.now()
-  datetimemask = "%Y%m%d"
-  bucket_name = event['Records'][0]['s3']['bucket']['name']
-  clientscsv = 'clients_{}.csv'.format(todaytimestamp.strftime(datetimemask))
-  accountscsv = 'accounts_{}.csv'.format(todaytimestamp.strftime(datetimemask))
-  portfolioscsv = 'portfolios_{}.csv'.format(todaytimestamp.strftime(datetimemask))
-  transactionscsv = 'transactions_{}.csv'.format(todaytimestamp.strftime(datetimemask))
-  
-  clientsfields = ['record_id','first_name','last_name','client_reference','tax_free_allowance']
-  accountsfields = ['record_id','accout_number','cash_balance','currency','taxes_paid']
-  portfoliosfields = ['record_id','accout_number','portfolio_reference','client_reference','agent_code']
-  transactionsfields = ['record_id','accout_number','transaction_reference','amount','keyword']
-  
-  find = 0
-  
-  for file in s3.list_objects(Bucket=bucket_name)['Contents']:
-    if file['Key'] == clientscsv or file['Key'] == accountscsv or file['Key'] == portfolioscsv or file['Key'] == transactionscsv:
-      find = find +1
-      if find == 4:
-        csv_object_cl = s3.get_object(Bucket=bucket_name, Key=clientscsv)
-        csv_object_ac = s3.get_object(Bucket=bucket_name, Key=accountscsv)
-        csv_object_pf = s3.get_object(Bucket=bucket_name, Key=portfolioscsv)
-        csv_object_tr = s3.get_object(Bucket=bucket_name, Key=transactionscsv)
-        if testfile(clientscsv,csv_object_cl,clientsfields) and testfile(accountscsv,csv_object_ac,accountsfields) and testfile(portfolioscsv,csv_object_pf,portfoliosfields) and testfile(transactionscsv,csv_object_tr,transactionsfields):
-          p1 = Process(target=processclients(clientscsv,portfolioscsv,transactionscsv))
-          p1.start()
-          p2 = Process(target=processportfolios(portfolioscsv,accountscsv,transactionscsv))
-          p2.start()
-          p1.join()
-          p2.join()
-          processed_files(bucket_name,clientscsv)
-          processed_files(bucket_name,accountscsv)
-          processed_files(bucket_name,portfolioscsv)
-          processed_files(bucket_name,transactionscsv)
-          return 0
+    s3 = boto3.client('s3')
+    lambda_client = boto3.client('lambda')
+    today_timestamp = datetime.now()
+    datetime_mask = '%Y%m%d'
+    bucket_name = event['Records'][0]['s3']['bucket']['name']
+    clients_csv = 'clients_{}.csv'.format(today_timestamp.strftime(datetime_mask))
+    accounts_csv = 'accounts_{}.csv'.format(today_timestamp.strftime(datetime_mask))
+    portfolios_csv = 'portfolios_{}.csv'.format(today_timestamp.strftime(datetime_mask))
+    transactions_csv = 'transactions_{}.csv'.format(today_timestamp.strftime(datetime_mask))
+    clients_fields = ['record_id', 'first_name', 'last_name', 'client_reference', 'tax_free_allowance']
+    accounts_fields = ['record_id', 'accout_number', 'cash_balance', 'currency', 'taxes_paid']
+    portfolios_fields = ['record_id', 'accout_number', 'portfolio_reference', 'client_reference', 'agent_code']
+    transactions_fields = ['record_id', 'accout_number', 'transaction_reference', 'amount', 'keyword']
+    find_files = 0
 
-  print ('Files not ready')
+    for file in s3.list_objects(Bucket=bucket_name)['Contents']:
+        if file['Key'] == clients_csv or file['Key'] == accounts_csv or file['Key'] == portfolios_csv or file['Key'] == transactions_csv:
+            find_files = find_files + 1
+            if find_files == 4:
+                csv_object_clients = s3.get_object(Bucket=bucket_name, Key=clients_csv)
+                csv_object_accounts = s3.get_object(Bucket=bucket_name, Key=accounts_csv)
+                csv_object_portfolios = s3.get_object(Bucket=bucket_name, Key=portfolios_csv)
+                csv_object_transactions = s3.get_object(Bucket=bucket_name,Key=transactions_csv)
+                if (testfile(clients_csv, csv_object_clients,
+                    clients_fields), testfile(accounts_csv,
+                    csv_object_accounts, accounts_fields),
+                    testfile(portfolios_csv, csv_object_portfolios,
+                    portfolios_fields), testfile(transactions_csv,
+                    csv_object_transactions, transactions_fields)) \
+                    == (True, True, True, True):
+
+                    p1 = Process(target=processclients(clients_csv, portfolios_csv, transactions_csv))
+                    p1.start()
+                    p2 = Process(target=processportfolios(portfolios_csv, accounts_csv, transactions_csv))
+                    p2.start()
+                    p1.join()
+                    p2.join()
+                    moveprocessedfiles(bucket_name, clients_csv)
+                    moveprocessedfiles(bucket_name, accounts_csv)
+                    moveprocessedfiles(bucket_name, portfolios_csv)
+                    moveprocessedfiles(bucket_name, transactions_csv)
+                    return 0
