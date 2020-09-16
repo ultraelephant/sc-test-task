@@ -5,12 +5,12 @@ variable project_name {
 
 variable access_key {
   description = "AWS access key"
-  default = "AKIASERQGRCLCGUVXRDT"
+  default = "AWSACCESSKEY"
 }
 
 variable secret_key {
   description = "AWS secret key"
-  default = "1DXzoNLRO0CyN/eI4X7Iozmdx4Mqt4J67P6jU0yV"
+  default = "AWSSECRET"
 }
 
 variable region {
